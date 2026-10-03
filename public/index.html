@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Android Device Setup</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='5' y='2' width='14' height='20' rx='2' fill='%23287BFF'/%3E%3Cline x1='12' y1='18' x2='12.01' y2='18' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="busy-bar" id="busyBar" aria-hidden="true"></div>
+
+  <!-- ================= Top bar ================= -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+      </div>
+      <div>
+        <h1>Android Device Setup</h1>
+        <p class="subtitle">Local ADB device provisioning dashboard</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="conn-pill" id="connPill" role="status"><span class="conn-dot"></span><span id="connText">Checking…</span></div>
+      <span class="topbar-divider" aria-hidden="true"></span>
+      <button id="themeToggle" class="icon-btn round" title="Toggle theme" aria-label="Toggle color theme">
+        <svg id="themeIconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg id="themeIconMoon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+      <button id="settingsBtn" class="icon-btn round" title="Settings" aria-label="Open settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <!-- ================= Sidebar ================= -->
+    <aside class="sidebar">
+      <nav class="nav" aria-label="Sections">
+        <button class="nav-item active" data-nav="dashboard">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" data-nav="devices" data-target="devicesCard">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span>Devices</span>
+        </button>
+        <button class="nav-item" data-nav="network" data-target="networkCard">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+          <span>Network</span>
+        </button>
+        <button class="nav-item" data-nav="apks" data-target="apksCard">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          <span>APKs</span>
+        </button>
+        <button class="nav-item" data-nav="logs" data-target="logsCard">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <span>Logs</span>
+        </button>
+        <button class="nav-item" data-nav="settings">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-status">
+        <span class="sidebar-status-dot" aria-hidden="true"></span>
+        <div>
+          <strong>Local session</strong>
+          <span>ADB stays on this PC</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ================= Main content ================= -->
+    <main class="content">
+      <div class="dashboard">
+
+        <!-- ============ LEFT COLUMN ============ -->
+        <div class="col main-col">
+
+          <!-- ADB Devices -->
+          <section class="card" id="devicesCard" aria-labelledby="devicesTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="devicesTitle">ADB Devices</h2>
+                  <p class="card-sub">Connected Android devices via ADB</p>
+                </div>
+              </div>
+              <div class="btn-row-inline">
+                <button id="refreshDevicesBtn" class="btn ghost-pill">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                  Refresh Devices
+                </button>
+                <button id="disconnectSelectedBtn" class="btn ghost-pill" disabled>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.84 12.25l1.72-1.71a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M5.17 11.75l-1.71 1.71a5 5 0 0 0 7.07 7.07l1.71-1.71"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+                  Disconnect Selected
+                </button>
+              </div>
+            </div>
+
+            <div class="devices-summary">
+              <p class="summary-line" id="deviceSummary">0 devices <span class="sep">|</span> 0 selected</p>
+              <div class="summary-actions">
+                <button id="selectAllDevicesBtn" class="btn link-btn">Select All</button>
+                <span class="sep">|</span>
+                <button id="deselectAllDevicesBtn" class="btn link-btn">Deselect All</button>
+              </div>
+            </div>
+
+            <div id="deviceListContainer" class="device-list-container">
+              <p class="no-devices">No ADB devices connected.</p>
+            </div>
+          </section>
+
+          <!-- Connect Device -->
+          <section class="card" id="connectCard" aria-labelledby="connectTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon cyan" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="connectTitle">Connect Device</h2>
+                  <p class="card-sub">Smart Connect or Manual ADB</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="mode-selector">
+              <label class="mode-option">
+                <input type="radio" name="connMode" value="smart" checked>
+                <span class="mode-label">Smart Connect</span>
+                <span class="mode-desc">Try Agent first, fallback to Manual</span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="connMode" value="connect">
+                <span class="mode-label">Manual ADB</span>
+                <span class="mode-desc">Direct PC-side ADB, no Agent needed</span>
+              </label>
+              <label class="mode-option">
+                <input type="radio" name="connMode" value="pair">
+                <span class="mode-label">Pair &amp; Connect</span>
+                <span class="mode-desc">New device, needs pairing</span>
+              </label>
+            </div>
+
+            <div class="form-row">
+              <div class="field">
+                <label for="connIp">IP Address</label>
+                <input type="text" id="connIp" placeholder="192.168.1.50" spellcheck="false">
+              </div>
+              <div class="field" id="pairPortField" style="display:none;">
+                <label for="pairPort">Pairing Port</label>
+                <input type="text" id="pairPort" placeholder="37099" inputmode="numeric">
+              </div>
+              <div class="field">
+                <label for="adbPort">ADB Connect Port</label>
+                <input type="text" id="adbPort" placeholder="5555" inputmode="numeric">
+              </div>
+            </div>
+
+            <div class="btn-row">
+              <button id="connectBtn" class="btn grad-pill">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                Connect
+              </button>
+            </div>
+          </section>
+
+          <!-- Android Agent Integration -->
+          <section class="card" id="agentCard" aria-labelledby="agentTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon purple" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 1 7 7c0 2.4-1.2 4.5-3 5.7V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.3C6.2 13.5 5 11.4 5 9a7 7 0 0 1 7-7z"/><path d="M9 21h6"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="agentTitle">Android Agent Integration</h2>
+                  <p class="card-sub">Automatic port-5555 recovery via on-device agent</p>
+                </div>
+              </div>
+            </div>
+
+            <div id="agentStatusContainer" class="agent-status-container">
+              <div class="agent-empty-state">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                <p>No devices scanned yet. Scan the network or connect a device to check Agent availability.</p>
+              </div>
+            </div>
+
+            <div class="agent-info">
+              <p class="agent-explain">
+                The <strong>Android Agent</strong> (<code>adb-auto-enable</code>) runs on the device and automatically
+                re-enables wireless ADB on port 5555 after reboot. It requires a one-time pairing and
+                <code>WRITE_SECURE_SETTINGS</code> permission.
+              </p>
+            </div>
+          </section>
+
+          <!-- APK Management -->
+          <section class="card" id="apksCard" aria-labelledby="apkTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon purple" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="apkTitle">APK Management</h2>
+                  <p class="card-sub">Install and manage APKs on selected devices</p>
+                </div>
+              </div>
+              <button id="scanBtn" class="btn ghost-pill">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                Scan APKs
+              </button>
+            </div>
+
+            <div class="source-row">
+              <span class="source-label">Source</span>
+              <span class="path-chip" id="apkSourcePath" title="APK source folder">D:\Apps</span>
+              <button id="chooseFolderBtn" class="btn ghost-pill small">Choose Folder</button>
+              <input type="file" id="folderPickerInput" webkitdirectory style="display:none">
+            </div>
+
+            <div class="table-wrap">
+              <table class="apk-table" id="apkTable">
+                <thead>
+                  <tr>
+                    <th class="col-check"><input type="checkbox" id="selectAllChk" aria-label="Select all APKs"></th>
+                    <th class="col-name">APK Name</th>
+                    <th class="col-size">Size</th>
+                    <th class="col-status">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="apkTableBody">
+                  <tr><td colspan="4" class="empty-cell">No APKs scanned. Click Scan to detect files.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="selection-row">
+              <span class="selection-info" id="selectionInfo">Selected: 0</span>
+              <div class="summary-actions">
+                <button id="selectAllBtn" class="btn link-btn">Select All</button>
+                <span class="sep">|</span>
+                <button id="clearSelectionBtn" class="btn link-btn">Clear</button>
+              </div>
+            </div>
+
+            <div class="destination-row">
+              <span class="source-label">Destination</span>
+              <span class="path-chip accent">/sdcard/Download/</span>
+            </div>
+
+            <div class="btn-row">
+              <button id="installBtn" class="btn ghost-pill">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Install Selected
+              </button>
+              <button id="pushBtn" class="btn ghost-pill">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Push to Device
+              </button>
+            </div>
+
+            <div id="pushProgress" class="push-progress hidden">
+              <h3>Push Progress</h3>
+              <div id="pushProgressList"></div>
+            </div>
+          </section>
+
+          <!-- Network & Connection (Complete Setup) -->
+          <section class="card setup-card" id="setupCard" aria-labelledby="setupTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon cyan" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="setupTitle">Network &amp; Connection</h2>
+                  <p class="card-sub">Manage network configuration and connect devices</p>
+                </div>
+              </div>
+            </div>
+            <button id="setupBtn" class="btn setup">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              RUN COMPLETE SETUP
+              <svg class="setup-arrow" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </button>
+          </section>
+
+        
+
+          <!-- Screen Mirroring (scrcpy) -->
+          <section class="card" id="scrcpyCard" aria-labelledby="scrcpyTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon green" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="scrcpyTitle">Screen Mirroring</h2>
+                  <p class="card-sub">Live display via scrcpy</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="field">
+                <label for="scrcpyDevice">Device</label>
+                <select id="scrcpyDevice">
+                  <option value="">-- Select Device --</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="scrcpyDisplay">Display</label>
+                <select id="scrcpyDisplay">
+                  <option value="">Default</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="btn-row">
+              <button id="scrcpyStartBtn" class="btn grad-pill">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Start Mirroring
+              </button>
+              <button id="scrcpyStopBtn" class="btn ghost-pill" disabled>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                Stop Mirroring
+              </button>
+            </div>
+
+            <div id="scrcpyStatus" class="scrcpy-status hidden"></div>
+          </section>
+
+          <!-- Custom Command -->
+          <section class="card" id="commandCard" aria-labelledby="commandTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon purple" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="commandTitle">Custom Command</h2>
+                  <p class="card-sub">Run any ADB command</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="field grow">
+                <label for="customCommand">ADB Command</label>
+                <input type="text" id="customCommand" placeholder="e.g. shell getprop ro.product.model" spellcheck="false">
+                <div class="command-hint">
+                  <button type="button" class="command-chip" data-cmd="shell getprop ro.product.model">model</button>
+                  <button type="button" class="command-chip" data-cmd="shell getprop ro.build.version.release">android ver</button>
+                  <button type="button" class="command-chip" data-cmd="shell pm list packages -3">installed pkgs</button>
+                  <button type="button" class="command-chip" data-cmd="shell dumpsys battery">battery</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="field">
+                <label for="commandDevice">Target Device</label>
+                <select id="commandDevice">
+                  <option value="">-- Select Device --</option>
+                </select>
+              </div>
+              <div class="field field-auto">
+                <label>&nbsp;</label>
+                <button id="runCommandBtn" class="btn grad-pill">Run Command</button>
+              </div>
+            </div>
+
+            <div id="commandOutput" class="command-output hidden"></div>
+          </section>
+</div>
+
+        <!-- ============ RIGHT COLUMN ============ -->
+        <div class="col side-col">
+
+          <!-- Network Discovery -->
+          <section class="card" id="networkCard" aria-labelledby="networkTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="networkTitle">Network Discovery</h2>
+                  <p class="card-sub">Scan your network for Android devices</p>
+                </div>
+              </div>
+              <button id="scanNetworkBtn" class="btn grad-pill">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+                Scan Network
+              </button>
+            </div>
+
+            <!-- Radar visual -->
+            <div class="radar" id="radar" aria-hidden="true">
+              <div class="radar-ring r1"></div>
+              <div class="radar-ring r2 dashed"></div>
+              <div class="radar-ring r3"></div>
+              <div class="radar-ring r4 dashed"></div>
+              <div class="radar-sweep"></div>
+              <div class="radar-core"></div>
+              <div class="radar-label">
+                <div class="radar-title" id="radarText">Ready to scan</div>
+                <div class="radar-sub" id="radarSub">No network interfaces found.</div>
+              </div>
+            </div>
+
+            <div id="networkScanStatus" class="network-scan-status hidden"></div>
+
+            <div class="network-results" aria-label="Network scan results">
+              <div id="discoveredDevicesList" class="discovered-devices-list"></div>
+              <div id="networkInterfacesList" class="network-interfaces-list"></div>
+            </div>
+
+            <!-- Stats strip -->
+            <div class="stat-row">
+              <div class="stat">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                </span>
+                <div class="stat-text">
+                  <span class="stat-label">Interfaces</span>
+                  <span class="stat-value" id="statIfaces">0</span>
+                </div>
+              </div>
+              <div class="stat">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                </span>
+                <div class="stat-text">
+                  <span class="stat-label">Devices Found</span>
+                  <span class="stat-value" id="statFound">0</span>
+                </div>
+              </div>
+              <div class="stat">
+                <span class="stat-icon" aria-hidden="true">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                </span>
+                <div class="stat-text">
+                  <span class="stat-label">Status</span>
+                  <span class="stat-value stat-status" id="statStatus"><span class="stat-dot"></span>Idle</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Live Log -->
+          
+
+          <!-- Apps (AppOps) -->
+          <section class="card" id="appopsCard" aria-labelledby="appopsTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="appopsTitle">Apps</h2>
+                  <p class="card-sub">Quick access to app permissions and tools</p>
+                </div>
+              </div>
+            </div>
+            <ul id="appopsList" class="appops-list"></ul>
+            <button id="appopsBtn" class="btn grad-wide">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run AppOps
+            </button>
+          </section>
+
+
+        </div>
+
+        
+
+        
+        <!-- Live Log (full width) -->
+        <section class="card" id="logsCard" aria-labelledby="logTitle">
+            <div class="card-header">
+              <div class="card-title">
+                <span class="card-icon" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                </span>
+                <div class="card-title-text">
+                  <h2 id="logTitle">Live Log</h2>
+                  <p class="card-sub">Real-time device connection logs</p>
+                </div>
+              </div>
+              <div class="btn-row-inline">
+                <button id="copyLogsBtn" class="btn ghost-pill small">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  Copy
+                </button>
+                <button id="clearLogsBtn" class="btn ghost-pill small">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  Clear
+                </button>
+              </div>
+            </div>
+            <div id="logPanel" class="log-panel" role="log" aria-live="polite"></div>
+          </section>
+
+        <!-- Result -->
+        <section class="card result hidden" id="resultCard" aria-live="polite">
+          <h2 id="resultTitle">Setup Completed</h2>
+          <div id="resultBody"></div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- ================= Browse modal (ADB executable) ================= -->
+  <div id="browseModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="browseTitle">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="browseTitle">Select ADB executable</h3>
+        <button id="browseCancel" class="icon-btn" title="Close" aria-label="Close dialog">✕</button>
+      </div>
+      <div id="browsePath" class="browse-path"></div>
+      <div id="browseList" class="browse-list"></div>
+      <div class="modal-actions">
+        <button id="browseCancelBtn" class="btn secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Settings modal ================= -->
+  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-content settings">
+      <div class="modal-header">
+        <h3 id="settingsTitle">Settings</h3>
+        <button id="settingsClose" class="icon-btn" title="Close" aria-label="Close settings">✕</button>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-group">
+          <span class="settings-group-title">Android Debug Bridge</span>
+          <div class="field">
+            <label for="settingsAdbPath">ADB Executable Path</label>
+            <div class="input-group">
+              <input type="text" id="settingsAdbPath" placeholder="auto" spellcheck="false">
+              <button id="settingsBrowseBtn" class="btn ghost-pill small">Browse</button>
+            </div>
+          </div>
+          <div id="settingsAdbStatus" class="adb-status">Checking…</div>
+        </div>
+
+        <div class="settings-group">
+          <span class="settings-group-title">APK Source</span>
+          <div class="field">
+            <label for="settingsApkDir">Default APK Folder</label>
+            <div class="input-group">
+              <input type="text" id="settingsApkDir" placeholder="D:\Apps" spellcheck="false">
+              <button id="settingsApkScanBtn" class="btn ghost-pill small">Scan</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="settingsCancel" class="btn secondary">Cancel</button>
+        <button id="settingsSave" class="btn primary">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Confirm dialog ================= -->
+  <div id="confirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="modal-content dialog">
+      <h3 id="confirmTitle">Confirm</h3>
+      <p class="dialog-message" id="confirmMessage"></p>
+      <div class="modal-actions">
+        <button id="confirmCancel" class="btn secondary">Cancel</button>
+        <button id="confirmOk" class="btn danger">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Prompt dialog ================= -->
+  <div id="promptModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="promptTitle">
+    <div class="modal-content dialog">
+      <h3 id="promptTitle">Enter value</h3>
+      <div class="field">
+        <label id="promptLabel" for="promptInput">Value</label>
+        <input type="text" id="promptInput" spellcheck="false">
+      </div>
+      <div class="modal-actions">
+        <button id="promptCancel" class="btn secondary">Cancel</button>
+        <button id="promptOk" class="btn primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Pairing dialog ================= -->
+  <div id="pairingModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="pairingTitle">
+    <div class="modal-content dialog">
+      <h3 id="pairingTitle">Pair Device</h3>
+      <div class="pairing-info">
+        <p class="pairing-explain">
+          <strong>Wireless Debugging Pairing</strong> establishes a trusted connection between this PC and the Android device.
+          The device displays a <strong>6-digit pairing code</strong> and a <strong>pairing port</strong> — enter them below.
+        </p>
+        <p class="pairing-explain">
+          This is different from <strong>ADB Connect</strong>, which connects to an already-enabled TCP ADB endpoint (e.g. port 5555).
+          Pairing is only needed once per device; after that, <strong>Connect</strong> is sufficient.
+        </p>
+      </div>
+      <div class="field">
+        <label for="pairingIp">Device IP Address</label>
+        <input type="text" id="pairingIp" placeholder="192.168.1.50" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="pairingPort">Pairing Port (from device screen)</label>
+        <input type="text" id="pairingPort" placeholder="e.g. 37099" inputmode="numeric" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="pairingCode">6-Digit Pairing Code</label>
+        <input type="text" id="pairingCode" placeholder="e.g. 123456" inputmode="numeric" spellcheck="false" maxlength="6">
+      </div>
+      <div class="modal-actions">
+        <button id="pairingCancel" class="btn secondary">Cancel</button>
+        <button id="pairingOk" class="btn primary">Pair & Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Toast notifications ================= -->
+  <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

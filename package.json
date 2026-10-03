@@ -1,0 +1,12 @@
+{
+  "name": "adb-device-setup",
+  "version": "1.0.0",
+  "description": "Local web application for setting up Android devices via ADB",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
