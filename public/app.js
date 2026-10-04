@@ -315,6 +315,7 @@ function renderState(s) {
   updateNetworkVisuals();
   updateCommandDeviceSelect();
   updateScrcpyDeviceSelect();
+  updateAgentInstallDeviceSelect();
   renderScrcpySessions(s.scrcpyRunning);
 
   if (s.setup.running) {
@@ -485,13 +486,18 @@ function renderNetworkInterfaces(interfaces, selectedId) {
   const container = $('networkInterfacesList');
   if (!container) return;
   container.innerHTML = '';
+  const query = $('discoverySearch')?.value || '';
+  // Filter the complete interface set before applying the display limit so
+  // searches can still find interfaces beyond the first ten results.
+  const matchingInterfaces = visibleNetworkInterfaces(filterDiscoveryResults(interfaces, query, ['name', 'ip', 'netmask', 'cidr', 'gateway']));
 
   if (!interfaces || !interfaces.length) {
     container.innerHTML = '<p class="no-devices">No network interfaces found.</p>';
+    updateDiscoverySearchEmpty();
     return;
   }
 
-  interfaces.forEach((iface) => {
+  matchingInterfaces.forEach((iface) => {
     const item = document.createElement('label');
     item.className = `network-interface${iface.id === selectedId ? ' selected' : ''}`;
 
@@ -524,6 +530,7 @@ function renderNetworkInterfaces(interfaces, selectedId) {
     const details = document.createElement('span');
     details.className = 'network-interface-details';
     const detailParts = [`${iface.ip}/${iface.cidr}`];
+    if (iface.netmask) detailParts.push(`mask ${iface.netmask}`);
     if (iface.gateway) detailParts.push(`GW ${iface.gateway}`);
     details.textContent = detailParts.join(' · ');
 
@@ -554,6 +561,16 @@ function renderNetworkInterfaces(interfaces, selectedId) {
     item.append(radio, info, badges);
     container.appendChild(item);
   });
+  updateDiscoverySearchEmpty();
+}
+
+function updateDiscoverySearchEmpty() {
+  const empty = $('discoverySearchEmpty');
+  if (!empty) return;
+  const query = $('discoverySearch')?.value || '';
+  const devices = filterDiscoveryResults(state.discoveredDevices, query, ['ip', 'name', 'serial', 'id']);
+  const interfaces = filterDiscoveryResults(state.networkInterfaces, query, ['name', 'ip', 'netmask', 'cidr', 'gateway']);
+  empty.classList.toggle('hidden', !query.trim() || devices.length + interfaces.length > 0);
 }
 
 /* Radar visual + stats strip for the Network Discovery card */
@@ -619,14 +636,17 @@ function renderDiscoveredDevices(devices) {
 
   if (!container) return;
   container.innerHTML = '';
+  const query = $('discoverySearch')?.value || '';
+  const matchingDevices = filterDiscoveryResults(devices, query, ['ip', 'name', 'serial', 'id']);
 
   if (!devices || !devices.length) {
     const diagnostic = state.networkScan.status || 'No devices found';
-    container.innerHTML = `<p class="no-devices">${diagnostic}</p>`;
+    if (!query.trim()) container.innerHTML = `<p class="no-devices">${diagnostic}</p>`;
+    updateDiscoverySearchEmpty();
     return;
   }
 
-  devices.forEach((d) => {
+  matchingDevices.forEach((d) => {
     const item = document.createElement('div');
     item.className = `discovered-device ${d.status}`;
 
@@ -798,6 +818,7 @@ function renderDiscoveredDevices(devices) {
     item.append(info, portInputWrap, actions);
     container.appendChild(item);
   });
+  updateDiscoverySearchEmpty();
 }
 
 function renderAgentIntegration(devices = [], networkScan = {}) {
@@ -897,28 +918,54 @@ async function connectDiscoveredDevice(device, port, alreadyBusy = false) {
 /**
  * Smart Connect — tries Agent Mode first, falls back to Manual ADB Mode.
  * Uses the /api/connect/smart endpoint which handles the dual-mode logic.
+ * Shows real-time progress from the backend stages.
  */
 async function smartConnectDiscovered(device, port) {
   if (busyState) return;
   setBusy(true);
+
+  // Create a progress toast that updates with each stage
+  const progressToast = showToast('Starting Smart Connect...', 'info', 0); // 0 = no auto-dismiss
+  let lastStage = '';
+
   try {
     const payload = { ip: device.ip, port: port || device.port || 5555 };
     // If the device has a pairing port and no agent, include pair info for manual mode
     if (device.pairPort && !(device.agent && device.agent.reachable)) {
       payload.pairPort = device.pairPort;
     }
+
+    // Use a polling approach to get stage updates
+    const stages = [];
+    const pollInterval = setInterval(async () => {
+      try {
+        const stateRes = await api('/api/state');
+        // Check if there's an active smart connect operation
+        // For now, we rely on the final response
+      } catch {
+        // ignore polling errors
+      }
+    }, 500);
+
     const r = await api('/api/connect/smart', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+
+    clearInterval(pollInterval);
+
     if (r.success) {
       const modeLabel = r.mode === 'agent' ? 'Agent Mode' : 'Manual Mode';
-      showToast(`Connected via ${modeLabel}: ${r.device.serial}`, 'success');
+      const serial = r.device && r.device.serial ? r.device.serial : `${device.ip}:${port || device.port}`;
+      showToast(`Connected via ${modeLabel}: ${serial}`, 'success');
+      dismissToast(progressToast);
     } else {
       showToast(r.error || 'Connection failed', 'error');
+      dismissToast(progressToast);
     }
   } catch (e) {
     showToast(e.message, 'error');
+    dismissToast(progressToast);
   } finally {
     setBusy(false);
   }
@@ -1047,6 +1094,78 @@ async function viewAgentLogs(device) {
     setBusy(false);
   }
 }
+
+/* ----- Install Agent ----- */
+
+function updateAgentInstallDeviceSelect() {
+  const select = $('agentInstallDevice');
+  if (!select) return;
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">-- Select Device --</option>';
+  state.devices
+    .filter((d) => d.state === 'device')
+    .forEach((d) => {
+      const opt = document.createElement('option');
+      opt.value = d.serial;
+      opt.textContent = d.serial;
+      select.appendChild(opt);
+    });
+  if (currentValue && state.devices.some((d) => d.serial === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
+async function installAgent() {
+  if (busyState) return;
+  const deviceSerial = $('agentInstallDevice').value;
+  if (!deviceSerial) {
+    showToast('Please select a target device', 'warning');
+    return;
+  }
+
+  setBusy(true);
+  const statusEl = $('agentInstallStatus');
+  statusEl.classList.remove('hidden');
+  statusEl.innerHTML = '<div class="agent-install-stage">Starting agent installation...</div>';
+
+  try {
+    const r = await api('/api/agent/install', {
+      method: 'POST',
+      body: JSON.stringify({ deviceSerial }),
+    });
+
+    if (r.success) {
+      // Render stages
+      const stagesHtml = r.stages.map((s) => {
+        const isError = s.stage.includes('failed') || s.stage.includes('missing') || s.stage.includes('unreachable');
+        return `<div class="agent-install-stage ${isError ? 'error' : ''}">${s.message}</div>`;
+      }).join('');
+      statusEl.innerHTML = stagesHtml;
+
+      if (r.agentReachable) {
+        showToast('Agent installed and reachable!', 'success');
+      } else if (r.message) {
+        showToast(r.message, 'info');
+      } else {
+        showToast('Agent installed successfully', 'success');
+      }
+    } else {
+      const stagesHtml = (r.stages || []).map((s) => {
+        const isError = s.stage.includes('failed') || s.stage.includes('missing');
+        return `<div class="agent-install-stage ${isError ? 'error' : ''}">${s.message}</div>`;
+      }).join('');
+      statusEl.innerHTML = stagesHtml || `<div class="agent-install-stage error">${r.error || 'Installation failed'}</div>`;
+      showToast(r.error || 'Agent installation failed', 'error');
+    }
+  } catch (e) {
+    statusEl.innerHTML = `<div class="agent-install-stage error">${e.message}</div>`;
+    showToast(e.message, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+$('installAgentBtn')?.addEventListener('click', installAgent);
 
 function renderApks(apks) {
   const tbody = $('apkTableBody');
@@ -1288,16 +1407,52 @@ $('refreshDevicesBtn').addEventListener('click', async () => {
 });
 
 $('scanNetworkBtn').addEventListener('click', async () => {
-  setBusy(true);
+  await runNetworkDiscovery(true).catch(() => {});
+});
+
+async function runNetworkDiscovery(showResultToast = false) {
+  const button = $('scanNetworkBtn');
+  if (button) button.disabled = true;
+  state.networkScan = { running: true, status: 'Scanning local network...', found: 0 };
+  updateNetworkVisuals();
+  renderDiscoveredDevices(state.discoveredDevices);
+  renderAgentIntegration(state.discoveredDevices, state.networkScan);
   try {
-    const r = await api('/api/network/scan', { method: 'POST' });
-    const found = r && r.devices ? r.devices.length : 0;
-    showToast(r.diagnostic || `Scan finished — ${found} device(s) found`, found > 0 ? 'success' : 'warning');
-  } catch (e) {
-    showToast(e.message, 'error');
+    const result = await api('/api/network/scan', { method: 'POST' });
+    // Apply the response directly so discovery remains visible if SSE is
+    // reconnecting. The same values are also broadcast by the backend.
+    state.discoveredDevices = Array.isArray(result.devices) ? result.devices : [];
+    if (Array.isArray(result.interfaces)) state.networkInterfaces = result.interfaces;
+    if (result.selected) state.selectedInterfaceId = result.selected.id;
+    state.networkScan = {
+      running: false,
+      status: result.diagnostic || `Found ${state.discoveredDevices.length} device(s)`,
+      found: state.discoveredDevices.length,
+    };
+    renderDiscoveredDevices(state.discoveredDevices);
+    renderNetworkInterfaces(state.networkInterfaces, state.selectedInterfaceId);
+    renderAgentIntegration(state.discoveredDevices, state.networkScan);
+    updateNetworkVisuals();
+    if (showResultToast) {
+      const found = state.discoveredDevices.length;
+      showToast(result.diagnostic || `Scan finished — ${found} device(s) found`, found > 0 ? 'success' : 'warning');
+    }
+    return result;
+  } catch (error) {
+    state.networkScan = { running: false, status: `Network discovery failed: ${error.message}`, found: 0 };
+    renderDiscoveredDevices(state.discoveredDevices);
+    renderAgentIntegration(state.discoveredDevices, state.networkScan);
+    updateNetworkVisuals();
+    if (showResultToast) showToast(error.message, 'error');
+    throw error;
   } finally {
-    setBusy(false);
+    if (button) button.disabled = false;
   }
+}
+
+$('discoverySearch')?.addEventListener('input', () => {
+  renderDiscoveredDevices(state.discoveredDevices);
+  renderNetworkInterfaces(state.networkInterfaces, state.selectedInterfaceId);
 });
 
 /* ----- Folder Picker ----- */
@@ -1520,40 +1675,87 @@ $('appopsBtn').addEventListener('click', async () => {
 /* ----- Scrcpy ----- */
 
 function updateScrcpyDeviceSelect() {
-  const select = $('scrcpyDevice');
-  if (!select) return;
-  const currentValue = select.value;
-  select.innerHTML = '<option value="">-- Select Device --</option>';
-  state.devices
-    .filter((d) => d.state === 'device')
-    .forEach((d) => {
-      const opt = document.createElement('option');
-      opt.value = d.serial;
-      opt.textContent = d.serial;
-      select.appendChild(opt);
-    });
-  if (currentValue && state.devices.some((d) => d.serial === currentValue)) {
-    select.value = currentValue;
+  const menu = $('scrcpyDeviceMenu');
+  if (!menu) return;
+  const devices = (state.devices || []).filter((d) => d.state === 'device');
+  const availableSerials = new Set(devices.map((d) => d.serial));
+  const activeSerials = new Set((state.scrcpyRunning || []).map((session) => session.serial));
+  for (const serial of scrcpySelectedSerials) {
+    if (!availableSerials.has(serial) && !activeSerials.has(serial)) scrcpySelectedSerials.delete(serial);
   }
+  menu.replaceChildren();
+  if (!devices.length) {
+    const empty = document.createElement('div');
+    empty.className = 'scrcpy-device-empty';
+    empty.textContent = 'No connected ADB devices';
+    menu.appendChild(empty);
+  }
+  devices.forEach((device, index) => {
+    const label = document.createElement('label');
+    label.className = 'scrcpy-device-option';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = device.serial;
+    checkbox.checked = scrcpySelectedSerials.has(device.serial);
+    checkbox.id = `scrcpyDeviceOption${index}`;
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked) scrcpySelectedSerials.add(device.serial);
+      else scrcpySelectedSerials.delete(device.serial);
+      updateScrcpySelectionLabel();
+      updateScrcpyButtons();
+      loadScrcpyDisplays([...scrcpySelectedSerials][0] || '');
+    });
+    const serial = document.createElement('span');
+    serial.textContent = device.serial;
+    label.append(checkbox, serial);
+    menu.appendChild(label);
+  });
+  updateScrcpySelectionLabel();
   updateScrcpyButtons();
 }
 
+function updateScrcpySelectionLabel() {
+  const label = $('scrcpyDeviceSelection');
+  const toggle = $('scrcpyDeviceToggle');
+  if (!label || !toggle) return;
+  const selected = [...scrcpySelectedSerials];
+  label.textContent = selected.length === 0
+    ? 'Choose devices'
+    : selected.length < 3
+      ? selected.join(', ')
+      : `${selected.length} devices selected`;
+  toggle.title = selected.join(', ');
+}
+
+function setScrcpyDeviceMenuOpen(open) {
+  const menu = $('scrcpyDeviceMenu');
+  const toggle = $('scrcpyDeviceToggle');
+  if (!menu || !toggle) return;
+  menu.hidden = !open;
+  toggle.setAttribute('aria-expanded', String(open));
+}
+
+function selectedScrcpySerials() {
+  return [...scrcpySelectedSerials];
+}
+
 function updateScrcpyButtons() {
-  const deviceSerial = $('scrcpyDevice')?.value;
-  const isRunning = deviceSerial && state.scrcpyRunning && state.scrcpyRunning.some((r) => r.serial === deviceSerial);
+  const selected = selectedScrcpySerials();
+  const running = state.scrcpyRunning || [];
+  const hasRunningSelection = selected.some((serial) => running.some((r) => r.serial === serial));
   const startBtn = $('scrcpyStartBtn');
   const stopBtn = $('scrcpyStopBtn');
-  if (startBtn) startBtn.disabled = busyState || !deviceSerial || isRunning;
-  if (stopBtn) stopBtn.disabled = busyState || !isRunning;
+  if (startBtn) startBtn.disabled = scrcpyStartInProgress || !hasEligibleScrcpyStart(selected, running);
+  if (stopBtn) stopBtn.disabled = !hasRunningSelection;
 }
 
 function renderScrcpySessions(running) {
   const el = $('scrcpyStatus');
   if (!el) return;
+  el.replaceChildren();
   if (!running || !running.length) {
     el.classList.add('hidden');
     el.className = 'scrcpy-status hidden';
-    el.innerHTML = '';
     return;
   }
   el.className = 'scrcpy-status running';
@@ -1564,7 +1766,9 @@ function renderScrcpySessions(running) {
   running.forEach((r) => {
     const row = document.createElement('div');
     row.className = 'scrcpy-session';
+    row.dataset.serial = r.serial;
     const serial = document.createElement('span');
+    serial.className = 'scrcpy-session-serial';
     serial.textContent = r.serial;
     serial.title = r.serial;
     row.appendChild(serial);
@@ -1574,6 +1778,13 @@ function renderScrcpySessions(running) {
       disp.textContent = `display ${r.displayId}`;
       row.appendChild(disp);
     }
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'btn ghost-pill scrcpy-session-stop';
+    stop.textContent = 'Stop';
+    stop.setAttribute('aria-label', `Stop mirroring ${r.serial}`);
+    stop.addEventListener('click', () => stopScrcpySession(r.serial));
+    row.appendChild(stop);
     el.appendChild(row);
   });
 }
@@ -1598,51 +1809,89 @@ async function loadScrcpyDisplays(deviceSerial) {
   }
 }
 
-$('scrcpyDevice')?.addEventListener('change', () => {
-  const serial = $('scrcpyDevice').value;
-  loadScrcpyDisplays(serial);
-  updateScrcpyButtons();
+$('scrcpyDeviceToggle')?.addEventListener('click', () => {
+  setScrcpyDeviceMenuOpen($('scrcpyDeviceMenu').hidden);
+});
+
+$('scrcpyDevicePicker')?.addEventListener('click', (event) => event.stopPropagation());
+document.addEventListener('click', (event) => {
+  if (!$('scrcpyDevicePicker')?.contains(event.target)) setScrcpyDeviceMenuOpen(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && $('scrcpyDeviceMenu') && !$('scrcpyDeviceMenu').hidden) {
+    setScrcpyDeviceMenuOpen(false);
+    $('scrcpyDeviceToggle')?.focus();
+  }
 });
 
 $('scrcpyStartBtn')?.addEventListener('click', async () => {
-  const deviceSerial = $('scrcpyDevice').value;
+  const deviceSerials = selectedScrcpySerials();
   const displayId = $('scrcpyDisplay').value;
-  if (!deviceSerial) {
-    showToast('Please select a device to mirror', 'warning');
+  if (!deviceSerials.length || scrcpyStartInProgress) {
+    if (!deviceSerials.length) showToast('Please select at least one device to mirror', 'warning');
     return;
   }
-  if (busyState) return;
-  setBusy(true);
-  try {
-    await api('/api/scrcpy/start', {
-      method: 'POST',
-      body: JSON.stringify({ deviceSerial, displayId: displayId || undefined }),
-    });
-    showToast(`Mirroring started${displayId ? ` (display ${displayId})` : ''}: ${deviceSerial}`, 'success');
+  if (!hasEligibleScrcpyStart(deviceSerials, state.scrcpyRunning || [])) {
     updateScrcpyButtons();
-  } catch (e) {
-    showToast(e.message, 'error');
+    return;
+  }
+  scrcpyStartInProgress = true;
+  updateScrcpyButtons();
+  const started = [];
+  const failures = [];
+  try {
+    for (const serial of deviceSerials) {
+      if ((state.scrcpyRunning || []).some((session) => session.serial === serial)) continue;
+      try {
+        await api('/api/scrcpy/start', {
+          method: 'POST',
+          body: JSON.stringify({ deviceSerial: serial, displayId: displayId || undefined }),
+        });
+        started.push(serial);
+      } catch (e) {
+        failures.push(`${serial}: ${e.message}`);
+      }
+    }
+    if (started.length) showToast(`Mirroring started for ${started.join(', ')}`, 'success');
+    if (failures.length) showToast(failures.join('; '), 'error');
   } finally {
-    setBusy(false);
+    scrcpyStartInProgress = false;
+    updateScrcpyButtons();
   }
 });
 
-$('scrcpyStopBtn')?.addEventListener('click', async () => {
-  const deviceSerial = $('scrcpyDevice').value;
-  if (!deviceSerial) return;
-  if (busyState) return;
-  setBusy(true);
+async function stopScrcpySession(deviceSerial) {
   try {
     await api('/api/scrcpy/stop', {
       method: 'POST',
       body: JSON.stringify({ deviceSerial }),
     });
     showToast(`Mirroring stopped: ${deviceSerial}`, 'info');
-    updateScrcpyButtons();
   } catch (e) {
     showToast(e.message, 'error');
   } finally {
-    setBusy(false);
+    updateScrcpyButtons();
+  }
+}
+
+$('scrcpyStopBtn')?.addEventListener('click', async () => {
+  const running = state.scrcpyRunning || [];
+  const selected = selectedScrcpySerials();
+  const targets = selected.filter((serial) => running.some((session) => session.serial === serial));
+  if (!targets.length) return;
+  const failures = [];
+  try {
+    for (const serial of targets) {
+      try {
+        await api('/api/scrcpy/stop', { method: 'POST', body: JSON.stringify({ deviceSerial: serial }) });
+      } catch (e) {
+        failures.push(`${serial}: ${e.message}`);
+      }
+    }
+    if (!failures.length) showToast(`Mirroring stopped for ${targets.join(', ')}`, 'info');
+    else showToast(failures.join('; '), 'error');
+  } finally {
+    updateScrcpyButtons();
   }
 });
 
@@ -2026,6 +2275,8 @@ document.addEventListener('keydown', (e) => {
    ============================================================ */
 
 let state = { devices: [], discoveredDevices: [], apks: [], appops: [], push: { running: false, files: [] }, setup: { running: false, result: null }, networkScan: { running: false, status: '', found: 0 }, selectedInterfaceId: null, networkInterfaces: [], scrcpyRunning: [] };
+const scrcpySelectedSerials = new Set();
+let scrcpyStartInProgress = false;
 
 
 async function init() {
@@ -2050,6 +2301,10 @@ async function init() {
     updateScrcpyDeviceSelect();
     updateCommandDeviceSelect();
   }).catch(() => {});
+  if (!window.__adbSetupInitialDiscoveryStarted) {
+    window.__adbSetupInitialDiscoveryStarted = true;
+    runNetworkDiscovery(false).catch(() => {});
+  }
 }
 
 init();

@@ -24,6 +24,7 @@ const fs = require('fs');
 const dgram = require('dgram');
 const os = require('os');
 const { AgentBridge } = require('./agent-bridge');
+const { ScrcpySessions } = require('./scrcpy-sessions');
 
 const PORT = process.env.PORT || 3000;
 const HOST = '127.0.0.1'; // LOCAL ONLY — never expose to LAN/Internet
@@ -58,6 +59,7 @@ let config = loadConfig();
 /* ---------------- Android Agent bridge ---------------- */
 
 const agentBridge = new AgentBridge({ port: 9093, timeoutMs: 3000, cacheTtlMs: 5000 });
+const scrcpySessions = new ScrcpySessions(() => broadcastState());
 
 /* ---------------- State ---------------- */
 
@@ -107,11 +109,7 @@ function publicState() {
     // Interfaces are computed live (never stored in state), so broadcasts
     // always carry a fresh list instead of the empty initial value.
     networkInterfaces: enumerateInterfaces(),
-    scrcpyRunning: [...scrcpyProcesses].map(([serial, info]) => ({
-      serial,
-      displayId: info.displayId,
-      startTime: info.startTime,
-    })),
+    scrcpyRunning: scrcpySessions.snapshot(),
   };
 }
 
@@ -871,6 +869,8 @@ app.post('/api/connect', async (req, res) => {
       });
       log('success', `Device connected: ${adbTarget}`);
       broadcastState();
+      // Sync agent status for the connected device (non-blocking)
+      syncAgentStatusForDevice(ip.trim()).catch(() => {});
       res.json({ success: true, device: dev, devices: state.devices });
     } else {
       log('error', 'Device not connected');
@@ -916,6 +916,9 @@ app.post('/api/devices/refresh', async (req, res) => {
 
     state.devices = newDevices;
     log('info', `Found ${state.devices.length} device(s) via adb devices`);
+    // scrcpy belongs to a live ADB transport. Retire sessions for devices
+    // that vanished or became unauthorized so stale controls cannot linger.
+    scrcpySessions.stopDisconnected(state.devices.filter((d) => d.state === 'device').map((d) => d.serial));
 
     // Fetch metadata for all connected devices concurrently (non-blocking)
     const metadataPromises = state.devices
@@ -929,6 +932,15 @@ app.post('/api/devices/refresh', async (req, res) => {
       );
     // Don't await metadata — let it complete in background
     Promise.allSettled(metadataPromises).then(() => broadcastState());
+
+    // Sync agent status for all connected devices (non-blocking)
+    const agentPromises = state.devices
+      .filter((d) => d.state === 'device' && d.serial.includes(':'))
+      .map((d) => {
+        const ip = d.serial.split(':')[0];
+        return syncAgentStatusForDevice(ip);
+      });
+    Promise.allSettled(agentPromises).catch(() => {});
 
     broadcastState();
     res.json({ success: true, devices: state.devices });
@@ -1072,6 +1084,49 @@ async function enrichDevicesWithAgentStatus(devices) {
     });
   await Promise.allSettled(probes);
   broadcastState();
+}
+
+/**
+ * Sync agent status for a single device by IP.
+ * Reuses existing discovered device entry if present (by IP), otherwise creates
+ * a minimal entry so the Agent Integration UI can display it.
+ * Never labels an unreachable agent as paired or healthy.
+ * Non-blocking: fires in background, broadcasts when complete.
+ */
+async function syncAgentStatusForDevice(ip) {
+  if (!ip) return;
+  try {
+    const status = await agentBridge.getStatus(ip);
+    const existing = state.discoveredDevices.find((d) => d.ip === ip);
+    if (existing) {
+      // Merge agent info without overwriting valid existing fields
+      existing.agent = status;
+      if (status.adb5555Available) {
+        const portOpen = await checkPortOpen(ip, 5555, 2000);
+        existing.agentPort5555Verified = portOpen;
+      } else {
+        existing.agentPort5555Verified = null;
+      }
+    } else {
+      // Create a minimal discovered device entry for this IP
+      state.discoveredDevices.push({
+        id: `adb-${ip}`,
+        name: `Android Device (${ip})`,
+        ip,
+        port: status.currentPort || status.targetPort || 5555,
+        pairPort: 0,
+        serviceType: '',
+        instanceName: '',
+        source: 'adb-refresh',
+        status: 'discovered',
+        agent: status,
+        agentPort5555Verified: status.adb5555Available ? await checkPortOpen(ip, 5555, 2000) : null,
+      });
+    }
+    broadcastState();
+  } catch (e) {
+    log('error', `[AgentSync] Failed to sync agent status for ${ip}: ${e.message}`);
+  }
 }
 
 function checkPortOpen(ip, port, timeoutMs = 2000) {
@@ -1549,22 +1604,153 @@ app.post('/api/agent/webserver', async (req, res) => {
   }
 });
 
-/* ----- Smart Connect (Agent + Manual dual-mode) ----- */
+/* ----- Install Android Agent ----- */
+
+const AGENT_PACKAGE = 'com.tpn.adbautoenable';
+const AGENT_APK_PATHS = [
+  path.join(__dirname, 'agent', 'adb-auto-enable.apk'),
+  path.join(__dirname, 'agent', 'ADB-auto-enable-0.3.5.apk'),
+  path.join(__dirname, 'agent', 'app-release.apk'),
+  path.join(__dirname, 'agent', 'agent.apk'),
+];
 
 /**
- * Verify a TCP port is actually reachable on a device.
+ * Install and start the Android Agent on a connected device.
+ * Workflow:
+ *   1. Verify device is connected via ADB
+ *   2. Locate the agent APK
+ *   3. Install via adb install
+ *   4. Verify installation via pm list packages
+ *   5. Start the agent service
+ *   6. Check agent HTTP reachability
  */
-function checkPortOpen(ip, port, timeoutMs = 2000) {
-  return new Promise((resolve) => {
-    const net = require('net');
-    const socket = new net.Socket();
-    socket.setTimeout(timeoutMs);
-    socket.once('connect', () => { socket.destroy(); resolve(true); });
-    socket.once('timeout', () => { socket.destroy(); resolve(false); });
-    socket.once('error', () => resolve(false));
-    socket.connect(port, ip);
-  });
-}
+app.post('/api/agent/install', async (req, res) => {
+  if (busy) return res.status(409).json({ error: 'Another operation is already running' });
+  const { deviceSerial } = req.body || {};
+  if (!deviceSerial || typeof deviceSerial !== 'string') {
+    return res.status(400).json({ error: 'Device serial is required' });
+  }
+
+  busy = true;
+  const stages = [];
+  const addStage = (stage, message) => {
+    stages.push({ stage, message });
+    log('info', `[AgentInstall] ${message}`);
+  };
+
+  try {
+    // Step 1: Verify device is connected
+    addStage('verify-device', `Verifying device ${deviceSerial} is connected...`);
+    const devices = await listDevices();
+    const dev = devices.find((d) => d.serial === deviceSerial && d.state === 'device');
+    if (!dev) {
+      return res.status(400).json({
+        success: false,
+        error: `Device ${deviceSerial} is not connected or authorized. Connect it first.`,
+        stages,
+      });
+    }
+    addStage('device-verified', 'Device is connected and authorized');
+
+    // Step 2: Locate the agent APK
+    addStage('locate-apk', 'Locating Android Agent APK...');
+    let apkPath = null;
+    for (const p of AGENT_APK_PATHS) {
+      if (fs.existsSync(p)) {
+        apkPath = p;
+        break;
+      }
+    }
+    if (!apkPath) {
+      const searched = AGENT_APK_PATHS.map((p) => path.basename(p)).join(', ');
+      addStage('apk-missing', `Agent APK not found. Searched: ${searched}`);
+      return res.status(404).json({
+        success: false,
+        error: `Android Agent APK not found. The agent APK was not found in the project. ` +
+          `Searched paths: ${AGENT_APK_PATHS.join(', ')}. ` +
+          `The agent source is available at https://github.com/mouldybread/adb-auto-enable — ` +
+          `build it with Android Studio or gradlew assembleRelease and place the APK in the agent/ directory.`,
+        stages,
+        apkMissing: true,
+      });
+    }
+    addStage('apk-found', `Found agent APK: ${path.basename(apkPath)}`);
+
+    // Step 3: Install the APK
+    addStage('installing', `Installing ${path.basename(apkPath)} on ${deviceSerial}...`);
+    const installRes = await runAdb(['-s', deviceSerial, 'install', '-r', apkPath], { timeoutMs: 120000 });
+    const installOut = (installRes.stdout + installRes.stderr).trim();
+    const installOk = installRes.code === 0 && /success/i.test(installRes.stdout) && !/failure/i.test(installRes.stdout);
+    if (!installOk) {
+      addStage('install-failed', `Installation failed: ${installOut}`);
+      return res.status(500).json({
+        success: false,
+        error: `Failed to install agent APK: ${installOut}`,
+        stages,
+      });
+    }
+    addStage('installed', 'Agent APK installed successfully');
+
+    // Step 4: Verify installation
+    addStage('verify-install', `Verifying package ${AGENT_PACKAGE}...`);
+    const pmRes = await runAdb(['-s', deviceSerial, 'shell', 'pm', 'list', 'packages', AGENT_PACKAGE], { timeoutMs: 10000 });
+    const pmOut = (pmRes.stdout + pmRes.stderr).trim();
+    if (!pmOut.includes(AGENT_PACKAGE)) {
+      addStage('verify-failed', `Package ${AGENT_PACKAGE} not found after install`);
+      return res.status(500).json({
+        success: false,
+        error: `Package ${AGENT_PACKAGE} not found after installation`,
+        stages,
+      });
+    }
+    addStage('verified', `Package ${AGENT_PACKAGE} verified`);
+
+    // Step 5: Start the agent service
+    addStage('starting', 'Starting agent service...');
+    const startRes = await runAdb(['-s', deviceSerial, 'shell', 'am', 'start', '-n', `${AGENT_PACKAGE}/.MainActivity`], { timeoutMs: 10000 });
+    const startOut = (startRes.stdout + startRes.stderr).trim();
+    addStage('started', `Agent service start command sent: ${startOut || 'ok'}`);
+
+    // Step 6: Check agent HTTP reachability
+    addStage('check-reachable', 'Checking agent HTTP service...');
+    const ip = deviceSerial.includes(':') ? deviceSerial.split(':')[0] : null;
+    if (ip) {
+      // Give the agent time to start its web server
+      await new Promise((r) => setTimeout(r, 3000));
+      const agentStatus = await agentBridge.getStatus(ip);
+      if (agentStatus.reachable) {
+        addStage('agent-reachable', `Agent is reachable on ${ip}:9093`);
+        broadcastState();
+        res.json({ success: true, stages, agentReachable: true, agentStatus });
+      } else {
+        addStage('agent-unreachable', `Agent not yet reachable: ${agentStatus.error}`);
+        // Don't fail — the agent may need manual pairing first
+        res.json({
+          success: true,
+          stages,
+          agentReachable: false,
+          agentStatus,
+          message: 'Agent installed and started, but not yet reachable. It may require pairing first.',
+        });
+      }
+    } else {
+      addStage('no-ip', 'Cannot determine device IP from serial — skipping reachability check');
+      res.json({
+        success: true,
+        stages,
+        agentReachable: null,
+        message: 'Agent installed and started. Reachability check skipped (USB device).',
+      });
+    }
+  } catch (e) {
+    log('error', `[AgentInstall] Error: ${e.message}`);
+    res.status(500).json({ success: false, error: e.message, stages });
+  } finally {
+    busy = false;
+  }
+});
+
+/* ----- Smart Connect (Agent + Manual dual-mode) ----- */
 
 app.get('/api/agent/verify-port', async (req, res) => {
   const ip = req.query.ip || '';
@@ -1584,93 +1770,123 @@ app.get('/api/agent/verify-port', async (req, res) => {
 /**
  * Smart Connect — tries Agent Mode first, falls back to Manual ADB Mode.
  *
- * Agent Mode: agent pair → agent switch to 5555 → verify TCP → adb connect
+ * Agent Mode: agent pair → agent switch → discover actual port → verify TCP → adb connect
  * Manual Mode: adb pair → adb connect → verify via adb devices
  *
- * Returns { mode, verified, device, error, agentReachable }.
+ * The agent's reported currentPort is used as the actual ADB endpoint — never assume 5555.
+ * Returns { mode, verified, device, error, agentReachable, agentPort, stages }.
  */
-async function smartConnect({ ip, port, pairPort, code }) {
+async function smartConnect({ ip, port, pairPort, code, onStage }) {
+  const report = (stage, message) => {
+    if (typeof onStage === 'function') onStage({ stage, message });
+  };
+  const stages = [];
+  const addStage = (stage, message) => {
+    stages.push({ stage, message });
+    report(stage, message);
+  };
+
   const targetPort = String(port || DEFAULT_ADB_PORT).trim();
   const target = `${ip}:${targetPort}`;
 
   // --- Try Agent Mode first ---
   try {
+    addStage('agent-check', 'Checking Android Agent...');
     const agentStatus = await agentBridge.getStatus(ip);
     if (agentStatus.reachable) {
-      log('info', `[SmartConnect] Agent reachable on ${ip}, trying Agent Mode...`);
+      addStage('agent-reachable', `Agent reachable on ${ip}`);
 
       // Agent pair if needed and code provided
       if (code && pairPort) {
+        addStage('pairing', `Pairing with agent at ${ip}:${pairPort}...`);
         const pairResult = await agentBridge.pair(ip, String(pairPort).trim(), code.trim());
         if (!pairResult.success) {
+          addStage('pair-failed', `Agent pairing failed: ${pairResult.error}`);
           log('error', `[SmartConnect] Agent pairing failed: ${pairResult.error}`);
-          // Fall through to manual mode
         } else {
+          addStage('paired', 'ADB paired successfully');
           log('success', `[SmartConnect] Agent pairing successful`);
         }
       }
 
+      // Determine the actual ADB port from the agent
+      const agentPort = agentStatus.currentPort || agentStatus.targetPort || Number(targetPort);
+      addStage('port-discover', `Agent reports ADB port: ${agentPort}`);
+
       // Agent switch to target port
+      addStage('recovering', 'Requesting agent to switch ADB port...');
       const switchResult = await agentBridge.switchPort(ip);
       if (switchResult.success) {
-        log('info', `[SmartConnect] Agent port switch started, waiting for 5555...`);
-        // Give the agent time to switch ports
+        addStage('recovering', 'Agent port switch started, waiting...');
         await new Promise((r) => setTimeout(r, 3000));
 
-        // Verify port 5555 is actually reachable
-        const portOpen = await checkPortOpen(ip, Number(targetPort), 3000);
+        // Verify the actual port is reachable
+        addStage('verifying', `Verifying port ${agentPort} on ${ip}...`);
+        const portOpen = await checkPortOpen(ip, agentPort, 3000);
         if (portOpen) {
-          log('success', `[SmartConnect] Port ${targetPort} verified on ${ip} via agent`);
+          addStage('port-verified', `Port ${agentPort} verified on ${ip}`);
+          log('success', `[SmartConnect] Port ${agentPort} verified on ${ip} via agent`);
 
-          // Connect via ADB
-          await runAdb(['connect', target], { timeoutMs: 15000 });
+          // Connect via ADB using the agent-reported port
+          const agentTarget = `${ip}:${agentPort}`;
+          addStage('connecting', `Connecting to ADB at ${agentTarget}...`);
+          await runAdb(['connect', agentTarget], { timeoutMs: 15000 });
           const devices = await listDevices();
-          const dev = devices.find((d) => d.serial === target && d.state === 'device');
+          const dev = devices.find((d) => d.serial === agentTarget && d.state === 'device');
           if (dev) {
-            return { mode: 'agent', verified: true, device: dev, agentReachable: true };
+            addStage('online', 'Device online and authorized');
+            return { mode: 'agent', verified: true, device: dev, agentReachable: true, agentPort, stages };
           }
-          // Port open but adb connect failed — device may need pairing
-          return { mode: 'agent', verified: false, error: 'Port open but ADB connect failed. Device may need pairing.', agentReachable: true };
+          addStage('connect-failed', 'Port open but ADB connect failed. Device may need pairing.');
+          return { mode: 'agent', verified: false, error: 'Port open but ADB connect failed. Device may need pairing.', agentReachable: true, agentPort, stages };
         }
-        log('error', `[SmartConnect] Port ${targetPort} not reachable on ${ip} after agent switch`);
-        // Fall through to manual mode
+        addStage('port-unreachable', `Port ${agentPort} not reachable on ${ip} after agent switch`);
+        log('error', `[SmartConnect] Port ${agentPort} not reachable on ${ip} after agent switch`);
       } else {
+        addStage('switch-failed', `Agent switch failed: ${switchResult.error}`);
         log('error', `[SmartConnect] Agent switch failed: ${switchResult.error}`);
-        // Fall through to manual mode
       }
     } else {
+      addStage('agent-unavailable', `Agent not reachable: ${agentStatus.error}`);
       log('info', `[SmartConnect] Agent not reachable on ${ip} (${agentStatus.error}), using Manual Mode`);
     }
   } catch (e) {
+    addStage('agent-error', `Agent Mode error: ${e.message}`);
     log('error', `[SmartConnect] Agent Mode error: ${e.message}, falling back to Manual Mode`);
   }
 
   // --- Manual ADB Mode ---
+  addStage('manual-mode', 'Trying Manual ADB Mode...');
   log('info', `[SmartConnect] Trying Manual ADB Mode for ${target}...`);
 
   // Manual pair if code and pairPort provided
   if (code && pairPort) {
     const pairTarget = `${ip}:${String(pairPort).trim()}`;
-    log('info', `[SmartConnect] Manual pairing with ${pairTarget}...`);
+    addStage('pairing', `Manual pairing with ${pairTarget}...`);
     const pairRes = await runAdb(['pair', pairTarget], { timeoutMs: 30000 });
     const pairOut = (pairRes.stdout + pairRes.stderr).trim();
     if (!(pairRes.code === 0 && !/fail|error|unable|refused|timed out/i.test(pairOut))) {
+      addStage('pair-failed', `Manual pairing failed`);
       log('error', `[SmartConnect] Manual pairing failed`);
       if (pairOut) log('error', pairOut);
-      return { mode: 'manual', verified: false, error: pairOut || 'Pairing failed', agentReachable: false };
+      return { mode: 'manual', verified: false, error: pairOut || 'Pairing failed', agentReachable: false, stages };
     }
+    addStage('paired', 'ADB paired successfully');
     log('success', `[SmartConnect] Manual pairing successful`);
   }
 
   // Manual connect
+  addStage('connecting', `Connecting to ADB at ${target}...`);
   await runAdb(['connect', target], { timeoutMs: 15000 });
   const devices = await listDevices();
   const dev = devices.find((d) => d.serial === target && d.state === 'device');
   if (dev) {
-    return { mode: 'manual', verified: true, device: dev, agentReachable: false };
+    addStage('online', 'Device online and authorized');
+    return { mode: 'manual', verified: true, device: dev, agentReachable: false, stages };
   }
 
-  return { mode: 'manual', verified: false, error: 'Device not connected. This device may not be paired with this computer.', agentReachable: false };
+  addStage('connect-failed', 'Device not connected. This device may not be paired with this computer.');
+  return { mode: 'manual', verified: false, error: 'Device not connected. This device may not be paired with this computer.', agentReachable: false, stages };
 }
 
 app.post('/api/connect/smart', async (req, res) => {
@@ -1683,7 +1899,15 @@ app.post('/api/connect/smart', async (req, res) => {
 
   busy = true;
   try {
-    const result = await smartConnect({ ip: ip.trim(), port: String(port).trim(), pairPort, code });
+    // Collect stages for the response (SSE-style progress is future work)
+    const stages = [];
+    const result = await smartConnect({
+      ip: ip.trim(),
+      port: String(port).trim(),
+      pairPort,
+      code,
+      onStage: (s) => stages.push(s),
+    });
 
     if (result.verified && result.device) {
       const target = `${ip.trim()}:${String(port).trim()}`;
@@ -1721,15 +1945,131 @@ app.post('/api/connect/smart', async (req, res) => {
         discovered.connectionMode = result.mode;
       }
 
+      // Sync agent status for the connected device (non-blocking)
+      syncAgentStatusForDevice(ip.trim()).catch(() => {});
+
       log('success', `[SmartConnect] Connected via ${result.mode} mode: ${target}`);
       broadcastState();
-      res.json({ success: true, mode: result.mode, device: result.device, devices: state.devices });
+      res.json({ success: true, mode: result.mode, device: result.device, devices: state.devices, stages });
     } else {
       log('error', `[SmartConnect] Failed: ${result.error}`);
-      res.status(500).json({ success: false, error: result.error, mode: result.mode, agentReachable: result.agentReachable });
+      res.status(500).json({ success: false, error: result.error, mode: result.mode, agentReachable: result.agentReachable, stages });
     }
   } catch (e) {
     log('error', `[SmartConnect] Error: ${e.message}`);
+    res.status(500).json({ success: false, error: e.message });
+  } finally {
+    busy = false;
+    broadcastState();
+  }
+});
+
+/**
+ * Reusable connection/recovery function.
+ * Checks current ADB state, queries the agent, discovers the actual endpoint,
+ * requests recovery if supported, and verifies the final connection.
+ * Bounded retries — never infinite.
+ */
+async function recoverConnection({ ip, port, maxRetries = 2, onStage }) {
+  const report = (stage, message) => {
+    if (typeof onStage === 'function') onStage({ stage, message });
+  };
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    report('attempt', `Recovery attempt ${attempt}/${maxRetries}...`);
+
+    // Check current ADB state
+    const devices = await listDevices();
+    const targetPort = String(port || DEFAULT_ADB_PORT).trim();
+    const target = `${ip}:${targetPort}`;
+    const existing = devices.find((d) => d.serial === target && d.state === 'device');
+    if (existing) {
+      report('online', 'Device already connected and authorized');
+      return { verified: true, device: existing, attempt };
+    }
+
+    // Query agent
+    const agentStatus = await agentBridge.getStatus(ip);
+    if (agentStatus.reachable) {
+      report('agent-reachable', 'Agent reachable — requesting recovery...');
+      const agentPort = agentStatus.currentPort || agentStatus.targetPort || Number(targetPort);
+      await agentBridge.switchPort(ip);
+      await new Promise((r) => setTimeout(r, 2000));
+
+      const portOpen = await checkPortOpen(ip, agentPort, 2000);
+      if (portOpen) {
+        const agentTarget = `${ip}:${agentPort}`;
+        await runAdb(['connect', agentTarget], { timeoutMs: 10000 });
+        const devs = await listDevices();
+        const dev = devs.find((d) => d.serial === agentTarget && d.state === 'device');
+        if (dev) {
+          report('online', 'Device online and authorized');
+          return { verified: true, device: dev, attempt };
+        }
+      }
+      report('retry', `Endpoint not reachable, retrying...`);
+    } else {
+      report('agent-unavailable', `Agent unavailable: ${agentStatus.error}`);
+      // Try manual connect
+      await runAdb(['connect', target], { timeoutMs: 10000 });
+      const devs = await listDevices();
+      const dev = devs.find((d) => d.serial === target && d.state === 'device');
+      if (dev) {
+        report('online', 'Device online and authorized');
+        return { verified: true, device: dev, attempt };
+      }
+    }
+
+    if (attempt < maxRetries) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
+  report('failed', 'Recovery failed after maximum retries');
+  return { verified: false, error: 'Recovery failed after maximum retries', attempts: maxRetries };
+}
+
+app.post('/api/connect/recover', async (req, res) => {
+  if (busy) return res.status(409).json({ error: 'Another operation is already running' });
+  const { ip, port, maxRetries } = req.body || {};
+  const ipErr = validateIp(ip);
+  if (ipErr) return res.status(400).json({ error: ipErr });
+
+  busy = true;
+  try {
+    const stages = [];
+    const result = await recoverConnection({
+      ip: ip.trim(),
+      port: String(port || DEFAULT_ADB_PORT).trim(),
+      maxRetries: Math.min(Math.max(parseInt(maxRetries, 10) || 2, 1), 5),
+      onStage: (s) => stages.push(s),
+    });
+
+    if (result.verified && result.device) {
+      const target = result.device.serial;
+      const existing = state.devices.find((d) => d.serial === target);
+      if (!existing) {
+        state.devices.push({
+          serial: target,
+          state: 'device',
+          model: '',
+          manufacturer: '',
+          androidVersion: '',
+          transportType: target.includes(':') ? 'wifi' : 'usb',
+          selected: true,
+          connectionMode: 'agent',
+        });
+      } else {
+        existing.state = 'device';
+        existing.selected = true;
+      }
+      broadcastState();
+      res.json({ success: true, device: result.device, stages });
+    } else {
+      res.status(500).json({ success: false, error: result.error, stages });
+    }
+  } catch (e) {
+    log('error', `[Recover] Error: ${e.message}`);
     res.status(500).json({ success: false, error: e.message });
   } finally {
     busy = false;
@@ -2075,8 +2415,6 @@ app.post('/api/push', async (req, res) => {
 
 /* ----- Scrcpy (screen mirroring) ----- */
 
-const scrcpyProcesses = new Map(); // serial -> { proc, displayId, startTime }
-
 function findScrcpyExe() {
   // Check PATH first
   try {
@@ -2128,12 +2466,11 @@ app.get('/api/scrcpy/displays', async (req, res) => {
 });
 
 app.post('/api/scrcpy/start', async (req, res) => {
-  if (busy) return res.status(409).json({ error: 'Another operation is already running' });
   const { deviceSerial, displayId } = req.body || {};
   if (!deviceSerial) return res.status(400).json({ error: 'Device serial is required' });
 
   // Check if scrcpy is already running for this device
-  if (scrcpyProcesses.has(deviceSerial)) {
+  if (scrcpySessions.has(deviceSerial)) {
     return res.status(400).json({ error: 'scrcpy is already running for this device' });
   }
 
@@ -2142,7 +2479,6 @@ app.post('/api/scrcpy/start', async (req, res) => {
     return res.status(404).json({ error: 'scrcpy executable not found. Please install scrcpy.' });
   }
 
-  busy = true;
   try {
     const args = ['-s', deviceSerial];
     if (displayId !== undefined && displayId !== null && displayId !== '') {
@@ -2150,16 +2486,13 @@ app.post('/api/scrcpy/start', async (req, res) => {
     }
     log('info', `Starting scrcpy for ${deviceSerial}${displayId ? ` (display ${displayId})` : ''}...`);
     const proc = spawn(scrcpyExe, args, { detached: true, stdio: 'ignore' });
-    proc.on('error', (e) => {
+    proc.once('error', (e) => {
       log('error', `scrcpy failed to start: ${e.message}`);
-      scrcpyProcesses.delete(deviceSerial);
     });
-    proc.on('exit', (code) => {
+    proc.once('exit', (code) => {
       log('info', `scrcpy for ${deviceSerial} exited with code ${code}`);
-      scrcpyProcesses.delete(deviceSerial);
-      broadcastState();
     });
-    scrcpyProcesses.set(deviceSerial, { proc, displayId: displayId || null, startTime: Date.now() });
+    scrcpySessions.add(deviceSerial, proc, displayId || null);
     log('success', `scrcpy started for ${deviceSerial}`);
     broadcastState();
     res.json({ success: true, serial: deviceSerial, displayId: displayId || null });
@@ -2167,7 +2500,6 @@ app.post('/api/scrcpy/start', async (req, res) => {
     log('error', `scrcpy start error: ${e.message}`);
     res.status(500).json({ error: e.message });
   } finally {
-    busy = false;
     broadcastState();
   }
 });
@@ -2176,14 +2508,12 @@ app.post('/api/scrcpy/stop', async (req, res) => {
   const { deviceSerial } = req.body || {};
   if (!deviceSerial) return res.status(400).json({ error: 'Device serial is required' });
 
-  const entry = scrcpyProcesses.get(deviceSerial);
-  if (!entry) {
+  if (!scrcpySessions.has(deviceSerial)) {
     return res.status(400).json({ error: 'scrcpy is not running for this device' });
   }
 
   try {
-    entry.proc.kill();
-    scrcpyProcesses.delete(deviceSerial);
+    scrcpySessions.stop(deviceSerial);
     log('info', `scrcpy stopped for ${deviceSerial}`);
     broadcastState();
     res.json({ success: true });
@@ -2194,11 +2524,7 @@ app.post('/api/scrcpy/stop', async (req, res) => {
 });
 
 app.get('/api/scrcpy/status', (req, res) => {
-  const running = [];
-  for (const [serial, info] of scrcpyProcesses) {
-    running.push({ serial, displayId: info.displayId, startTime: info.startTime });
-  }
-  res.json({ success: true, running });
+  res.json({ success: true, running: scrcpySessions.snapshot() });
 });
 
 /* ----- Custom Command ----- */

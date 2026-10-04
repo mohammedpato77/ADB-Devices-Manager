@@ -4,7 +4,8 @@
   "description": "Local web application for setting up Android devices via ADB",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test-agent.js && node test-scrcpy.js && node test-discovery.js"
   },
   "dependencies": {
     "express": "^4.21.2"

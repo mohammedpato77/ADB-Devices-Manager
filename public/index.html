@@ -201,6 +201,25 @@
                 <code>WRITE_SECURE_SETTINGS</code> permission.
               </p>
             </div>
+
+            <div class="agent-install-section">
+              <div class="form-row">
+                <div class="field">
+                  <label for="agentInstallDevice">Target Device</label>
+                  <select id="agentInstallDevice">
+                    <option value="">-- Select Device --</option>
+                  </select>
+                </div>
+                <div class="field field-auto">
+                  <label>&nbsp;</label>
+                  <button id="installAgentBtn" class="btn grad-pill">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Install Agent
+                  </button>
+                </div>
+              </div>
+              <div id="agentInstallStatus" class="agent-install-status hidden"></div>
+            </div>
           </section>
 
           <!-- APK Management -->
@@ -311,12 +330,17 @@
               </div>
             </div>
 
+            <p id="scrcpyHelp" class="scrcpy-help">Select connected ADB devices. Network discoveries become available after connecting with Pair &amp; Connect. Each device opens in its own scrcpy window.</p>
             <div class="form-row">
               <div class="field">
-                <label for="scrcpyDevice">Device</label>
-                <select id="scrcpyDevice">
-                  <option value="">-- Select Device --</option>
-                </select>
+                <label for="scrcpyDeviceToggle">Devices</label>
+                <div class="scrcpy-device-picker" id="scrcpyDevicePicker">
+                  <button id="scrcpyDeviceToggle" class="scrcpy-device-toggle" type="button" aria-expanded="false" aria-controls="scrcpyDeviceMenu" aria-describedby="scrcpyHelp">
+                    <span id="scrcpyDeviceSelection">Choose devices</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                  </button>
+                  <div id="scrcpyDeviceMenu" class="scrcpy-device-menu" role="group" aria-label="Select devices" hidden></div>
+                </div>
               </div>
               <div class="field">
                 <label for="scrcpyDisplay">Display</label>
@@ -329,11 +353,11 @@
             <div class="btn-row">
               <button id="scrcpyStartBtn" class="btn grad-pill">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                Start Mirroring
+                Start Selected
               </button>
               <button id="scrcpyStopBtn" class="btn ghost-pill" disabled>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
-                Stop Mirroring
+                Stop Selected
               </button>
             </div>
 
@@ -421,8 +445,14 @@
 
             <div id="networkScanStatus" class="network-scan-status hidden"></div>
 
+            <label class="discovery-search-label" for="discoverySearch">Search discovery results</label>
+            <input id="discoverySearch" class="discovery-search" type="search" placeholder="IP address, interface, device, or serial" autocomplete="off">
+
             <div class="network-results" aria-label="Network scan results">
+              <p id="discoverySearchEmpty" class="no-devices hidden" role="status">No matching results.</p>
+              <h4 class="network-result-heading">Discovered network hosts</h4>
               <div id="discoveredDevicesList" class="discovered-devices-list"></div>
+              <h4 class="network-result-heading">Network interfaces</h4>
               <div id="networkInterfacesList" class="network-interfaces-list"></div>
             </div>
 
@@ -641,6 +671,8 @@
   <!-- ================= Toast notifications ================= -->
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>
 
+  <script src="discovery-utils.js"></script>
+  <script src="scrcpy-utils.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
