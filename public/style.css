@@ -1186,10 +1186,29 @@ input[type="radio"] {
   flex-shrink: 0;
 }
 
+.agent-port-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--cyan-soft);
+  color: var(--cyan);
+  border: 1px solid rgba(34, 195, 240, 0.4);
+  flex-shrink: 0;
+}
+
 .agent-actions {
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px solid var(--border-soft);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
 }
 
 /* Pairing dialog */
@@ -1284,7 +1303,13 @@ input[type="radio"] {
 }
 .discovered-device-port:focus { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 
-.discovered-device-actions { display: flex; gap: 6px; flex-shrink: 0; margin-left: auto; }
+.discovered-device-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+  min-width: 0;
+}
 
 /* ---------- Stats strip ---------- */
 

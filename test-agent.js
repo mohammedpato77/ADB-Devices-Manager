@@ -1014,7 +1014,7 @@ function testAgentUiIntegration() {
   assert(app.includes("method: 'POST'") && app.includes('JSON.stringify({ deviceSerial })'), 'Install Agent sends the selected device serial as JSON');
   assert(server.includes("app.post('/api/connect'"), 'legacy Connect Only endpoint remains registered');
   assert(server.includes("app.post('/api/connect/smart'"), 'Smart Connect endpoint remains registered');
-  assert(server.includes('d.agentPort5555Verified = portOpen'), '5555 state is based on independent TCP verification');
+  assert(server.includes('d.agentPortVerified = portOpen'), 'agent port state is based on independent TCP verification');
   assert(app.includes('ADB connected at ${liveAdbDevice ? liveAdbDevice.serial'), 'connected port label distinguishes actual ADB connection from discovery');
 }
 

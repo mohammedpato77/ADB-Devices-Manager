@@ -1041,7 +1041,21 @@ app.get('/api/devices', async (req, res) => {
 
 app.get('/api/network/interfaces', (req, res) => {
   const interfaces = enumerateInterfaces();
-  res.json({ interfaces, selectedId: state.selectedInterfaceId || null });
+  // Auto-select Wi-Fi adapter if no interface is currently selected
+  let selectedId = state.selectedInterfaceId || null;
+  if (!selectedId && interfaces.length) {
+    // Find the best Wi-Fi adapter (identified by name, not hardcoded)
+    const wifiIface = interfaces.find((i) => {
+      const name = i.name.toLowerCase();
+      return name.includes('wi-fi') || name.includes('wifi') || name.includes('wireless');
+    });
+    if (wifiIface) {
+      selectedId = wifiIface.id;
+      state.selectedInterfaceId = selectedId;
+      log('info', `[Network] Auto-selected Wi-Fi interface: ${wifiIface.name} (${wifiIface.ip}/${wifiIface.cidr})`);
+    }
+  }
+  res.json({ interfaces, selectedId });
 });
 
 app.post('/api/network/select-interface', (req, res) => {
@@ -1069,17 +1083,19 @@ async function enrichDevicesWithAgentStatus(devices) {
       try {
         const status = await agentBridge.getStatus(d.ip);
         d.agent = status;
-        // Verify port 5555 is actually reachable if the agent claims it's available
-        if (status.adb5555Available) {
-          const portOpen = await checkPortOpen(d.ip, 5555, 2000);
-          d.agentPort5555Verified = portOpen;
+        // Use the agent's reported port — currentPort, targetPort, or lastPort — never assume 5555
+        const agentPort = status.currentPort || status.targetPort || status.lastPort || null;
+        if (agentPort) {
+          d.port = agentPort;
+          // Independently verify the agent-reported port is reachable
+          const portOpen = await checkPortOpen(d.ip, agentPort, 2000);
+          d.agentPortVerified = portOpen;
         } else {
-          // Agent's claim that 5555 is unavailable is not an independent TCP check.
-          d.agentPort5555Verified = null;
+          d.agentPortVerified = null;
         }
       } catch (e) {
         d.agent = { reachable: false, error: e.message, isPaired: false };
-        d.agentPort5555Verified = null;
+        d.agentPortVerified = null;
       }
     });
   await Promise.allSettled(probes);
@@ -1098,14 +1114,17 @@ async function syncAgentStatusForDevice(ip) {
   try {
     const status = await agentBridge.getStatus(ip);
     const existing = state.discoveredDevices.find((d) => d.ip === ip);
+    // Use the agent's reported port — currentPort, targetPort, or lastPort — never assume 5555
+    const agentPort = status.currentPort || status.targetPort || status.lastPort || null;
     if (existing) {
       // Merge agent info without overwriting valid existing fields
       existing.agent = status;
-      if (status.adb5555Available) {
-        const portOpen = await checkPortOpen(ip, 5555, 2000);
-        existing.agentPort5555Verified = portOpen;
+      if (agentPort) {
+        existing.port = agentPort;
+        const portOpen = await checkPortOpen(ip, agentPort, 2000);
+        existing.agentPortVerified = portOpen;
       } else {
-        existing.agentPort5555Verified = null;
+        existing.agentPortVerified = null;
       }
     } else {
       // Create a minimal discovered device entry for this IP
@@ -1113,14 +1132,14 @@ async function syncAgentStatusForDevice(ip) {
         id: `adb-${ip}`,
         name: `Android Device (${ip})`,
         ip,
-        port: status.currentPort || status.targetPort || 5555,
+        port: agentPort || undefined,
         pairPort: 0,
         serviceType: '',
         instanceName: '',
         source: 'adb-refresh',
         status: 'discovered',
         agent: status,
-        agentPort5555Verified: status.adb5555Available ? await checkPortOpen(ip, 5555, 2000) : null,
+        agentPortVerified: agentPort ? await checkPortOpen(ip, agentPort, 2000) : null,
       });
     }
     broadcastState();
@@ -2587,6 +2606,87 @@ app.post('/api/command', async (req, res) => {
     broadcastState();
   }
 });
+
+/* ----- Agent device actions (switch port, reboot) ----- */
+
+/**
+ * Execute a narrowly-scoped ADB device action for an Agent-managed device.
+ * Validates the device is connected before executing.
+ */
+async function executeAgentDeviceAction(req, res, action) {
+  if (busy) return res.status(409).json({ error: 'Another operation is already running' });
+  const { deviceSerial } = req.body || {};
+  if (!deviceSerial || typeof deviceSerial !== 'string') {
+    return res.status(400).json({ error: 'Device serial is required' });
+  }
+
+  busy = true;
+  try {
+    // Verify the device is actually connected
+    const devices = await listDevices();
+    const dev = devices.find((d) => d.serial === deviceSerial && d.state === 'device');
+    if (!dev) {
+      return res.status(400).json({ error: `Device ${deviceSerial} is not connected or authorized.` });
+    }
+
+    let args;
+    let actionName;
+    if (action === 'switch-5555') {
+      args = ['-s', deviceSerial, 'tcpip', '5555'];
+      actionName = 'Switch ADB TCP port to 5555';
+    } else if (action === 'reboot') {
+      args = ['-s', deviceSerial, 'reboot'];
+      actionName = 'Reboot device';
+    } else {
+      return res.status(400).json({ error: 'Unknown action' });
+    }
+
+    log('info', `[AgentAction] ${actionName} on ${deviceSerial}`);
+    const r = await runAdb(args, { timeoutMs: 30000 });
+    const out = (r.stdout + r.stderr).trim();
+
+    if (r.code === 0) {
+      log('success', `[AgentAction] ${actionName} completed on ${deviceSerial}`);
+      if (out) log('adb', out);
+
+      // For switch-5555, refresh agent status to get the new port
+      if (action === 'switch-5555') {
+        const ip = deviceSerial.includes(':') ? deviceSerial.split(':')[0] : null;
+        if (ip) {
+          agentBridge.clearCache(ip);
+          // Give the device time to switch ports
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const agentStatus = await agentBridge.getStatus(ip);
+          // Update the discovered device with the new agent-reported port
+          const discovered = state.discoveredDevices.find((d) => d.ip === ip);
+          if (discovered) {
+            discovered.agent = agentStatus;
+            const newPort = agentStatus.currentPort || agentStatus.targetPort || agentStatus.lastPort;
+            if (newPort) {
+              discovered.port = newPort;
+            }
+          }
+          broadcastState();
+        }
+      }
+
+      res.json({ success: true, output: out, serial: deviceSerial, action });
+    } else {
+      log('error', `[AgentAction] ${actionName} failed on ${deviceSerial} (exit ${r.code})`);
+      if (out) log('error', out);
+      res.status(500).json({ success: false, error: out || `Command failed with exit code ${r.code}`, output: out, serial: deviceSerial });
+    }
+  } catch (e) {
+    log('error', `[AgentAction] Error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  } finally {
+    busy = false;
+    broadcastState();
+  }
+}
+
+app.post('/api/agent/switch-5555', (req, res) => executeAgentDeviceAction(req, res, 'switch-5555'));
+app.post('/api/agent/reboot', (req, res) => executeAgentDeviceAction(req, res, 'reboot'));
 
 /* ----- Complete setup workflow ----- */
 

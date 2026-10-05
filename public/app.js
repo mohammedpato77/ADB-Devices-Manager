@@ -679,8 +679,9 @@ function renderDiscoveredDevices(devices) {
       const agentReachable = d.agent.reachable;
       agentBadge.className = `agent-badge ${agentReachable ? 'reachable' : 'unreachable'}`;
       agentBadge.textContent = agentReachable ? '● Agent available' : '○ Agent unavailable';
+      const agentPort = d.agent.currentPort || d.agent.targetPort || d.agent.lastPort;
       agentBadge.title = agentReachable
-        ? `Agent: paired=${d.agent.isPaired}, port=${d.agent.currentPort}, 5555=${d.agent.adb5555Available}`
+        ? `Agent: paired=${d.agent.isPaired}, ADB port=${agentPort || 'unknown'}`
         : `Agent status unavailable: ${d.agent.error || 'no response'}`;
       info.appendChild(agentBadge);
     } else {
@@ -710,13 +711,25 @@ function renderDiscoveredDevices(devices) {
       : 'Connection: Not connected';
     info.appendChild(connectionModeBadge);
 
-    // Port 5555 verified indicator
-    const verifiedBadge = document.createElement('span');
-    verifiedBadge.className = `port-verified-badge ${d.agentPort5555Verified ? 'verified' : 'unverified'}`;
-    verifiedBadge.textContent = d.agentPort5555Verified === true
-      ? '✓ Port 5555 independently reachable'
-      : d.agentPort5555Verified === false ? '○ Port 5555 checked and not reachable' : '○ Port 5555 not independently verified';
-    info.appendChild(verifiedBadge);
+    // Agent-reported ADB port badge
+    const agentPort = d.agent && (d.agent.currentPort || d.agent.targetPort || d.agent.lastPort);
+    if (agentPort) {
+      const portBadge = document.createElement('span');
+      portBadge.className = 'agent-port-badge';
+      portBadge.textContent = `ADB Port ${agentPort}`;
+      info.appendChild(portBadge);
+    }
+
+    // Port verified indicator (uses agent-reported port, not hardcoded 5555)
+    const verifiedPort = d.agentPortVerified !== undefined ? (d.agent?.currentPort || d.agent?.targetPort) : null;
+    if (d.agentPortVerified !== undefined) {
+      const verifiedBadge = document.createElement('span');
+      verifiedBadge.className = `port-verified-badge ${d.agentPortVerified ? 'verified' : 'unverified'}`;
+      verifiedBadge.textContent = d.agentPortVerified === true
+        ? `✓ Port ${verifiedPort || 'unknown'} independently reachable`
+        : d.agentPortVerified === false ? `○ Port ${verifiedPort || 'unknown'} checked and not reachable` : '○ Port not independently verified';
+      info.appendChild(verifiedBadge);
+    }
 
     // Last error display
     if (d.lastError) {
@@ -798,12 +811,31 @@ function renderDiscoveredDevices(devices) {
       const agentActions = document.createElement('div');
       agentActions.className = 'discovered-device-actions agent-actions';
 
-      const switchBtn = document.createElement('button');
-      switchBtn.className = 'btn accent small';
-      switchBtn.textContent = '⇄ Switch to 5555';
-      switchBtn.title = 'Request agent to switch ADB to port 5555';
-      switchBtn.addEventListener('click', () => agentSwitchPort(d));
-      agentActions.appendChild(switchBtn);
+      // Agent switch (requests agent to switch to its target port)
+      const agentSwitchBtn = document.createElement('button');
+      agentSwitchBtn.className = 'btn accent small';
+      agentSwitchBtn.textContent = '⇄ Agent Switch';
+      agentSwitchBtn.title = 'Request agent to switch ADB to its target port';
+      agentSwitchBtn.addEventListener('click', () => agentSwitchPort(d));
+      agentActions.appendChild(agentSwitchBtn);
+
+      // ADB tcpip 5555 — only enabled when device is connected
+      const tcpipBtn = document.createElement('button');
+      tcpipBtn.className = 'btn grad-pill small';
+      tcpipBtn.textContent = 'Switch to 5555';
+      tcpipBtn.title = 'Execute adb tcpip 5555 on the connected device';
+      tcpipBtn.disabled = d.status !== 'connected';
+      tcpipBtn.addEventListener('click', () => switchTo5555(d));
+      agentActions.appendChild(tcpipBtn);
+
+      // Reboot — only enabled when device is connected
+      const rebootBtn = document.createElement('button');
+      rebootBtn.className = 'btn danger small';
+      rebootBtn.textContent = 'Reboot';
+      rebootBtn.title = 'Reboot the connected device';
+      rebootBtn.disabled = d.status !== 'connected';
+      rebootBtn.addEventListener('click', () => rebootDevice(d));
+      agentActions.appendChild(rebootBtn);
 
       const logsBtn = document.createElement('button');
       logsBtn.className = 'btn ghost-pill small';
@@ -860,9 +892,10 @@ function renderAgentIntegration(devices = [], networkScan = {}) {
     const portInfo = device.status === 'connected'
       ? `ADB connected at ${liveAdbDevice ? liveAdbDevice.serial : `${device.ip}:${device.port || 'port unknown'}`}`
       : `ADB not connected${device.port ? ` · discovered ADB port ${device.port} (not yet connected)` : ''}`;
-    const verified = device.agentPort5555Verified === true
-      ? 'Port 5555 independently verified reachable'
-      : device.agentPort5555Verified === false ? 'Port 5555 independently checked and not reachable' : 'Port 5555 not independently verified';
+    const agentPort = device.agent && (device.agent.currentPort || device.agent.targetPort || device.agent.lastPort);
+    const verified = device.agentPortVerified === true
+      ? `Port ${agentPort || 'unknown'} independently verified reachable`
+      : device.agentPortVerified === false ? `Port ${agentPort || 'unknown'} independently checked and not reachable` : 'Port not independently verified';
     const extraPortCheck = device.verifiedPortStatus && device.verifiedPortStatus.port !== 5555
       ? ` · Port ${device.verifiedPortStatus.port} ${device.verifiedPortStatus.open ? 'independently reachable' : 'not reachable'}` : '';
     meta.textContent = `${portInfo} · ${device.status === 'connected' ? (device.connectionMode === 'agent' ? 'Connection: Agent' : 'Connection: Manual ADB') : 'Connection: Not connected'} · ${verified}${extraPortCheck}`;
@@ -929,7 +962,9 @@ async function smartConnectDiscovered(device, port) {
   let lastStage = '';
 
   try {
-    const payload = { ip: device.ip, port: port || device.port || 5555 };
+    // Use the agent's reported port if available — never assume 5555
+    const agentPort = device.agent && (device.agent.currentPort || device.agent.targetPort || device.agent.lastPort);
+    const payload = { ip: device.ip, port: port || agentPort || device.port || 5555 };
     // If the device has a pairing port and no agent, include pair info for manual mode
     if (device.pairPort && !(device.agent && device.agent.reachable)) {
       payload.pairPort = device.pairPort;
@@ -996,16 +1031,18 @@ async function refreshDeviceStatus(device) {
   try {
     const r = await api(`/api/agent/status?ip=${encodeURIComponent(device.ip)}`);
     device.agent = r;
-    if (r.adb5555Available) {
-      const portR = await api(`/api/agent/verify-port?ip=${encodeURIComponent(device.ip)}&port=5555`);
-      device.agentPort5555Verified = portR.open;
-    } else device.agentPort5555Verified = null;
+    // Use the agent's reported port — never assume 5555
+    const agentPort = r.currentPort || r.targetPort || r.lastPort;
+    if (agentPort) {
+      const portR = await api(`/api/agent/verify-port?ip=${encodeURIComponent(device.ip)}&port=${agentPort}`);
+      device.agentPortVerified = portR.open;
+    } else device.agentPortVerified = null;
     renderDiscoveredDevices(state.discoveredDevices);
     renderAgentIntegration(state.discoveredDevices, state.networkScan);
     showToast(`Status refreshed for ${device.ip}`, 'info');
   } catch (e) {
     device.agent = { reachable: false, error: e.message };
-    device.agentPort5555Verified = null;
+    device.agentPortVerified = null;
     renderDiscoveredDevices(state.discoveredDevices);
     renderAgentIntegration(state.discoveredDevices, state.networkScan);
     showToast(e.message, 'error');
@@ -1015,15 +1052,18 @@ async function refreshDeviceStatus(device) {
 }
 
 /**
- * Verify port 5555 is reachable on the device from the PC.
+ * Verify the agent-reported ADB port is reachable on the device from the PC.
  */
 async function verifyDevicePort(device, port) {
   if (busyState) return;
   setBusy(true);
   try {
-    const r = await api(`/api/agent/verify-port?ip=${encodeURIComponent(device.ip)}&port=${encodeURIComponent(port || 5555)}`);
+    // Use the agent's reported port if no explicit port provided
+    const agentPort = device.agent && (device.agent.currentPort || device.agent.targetPort || device.agent.lastPort);
+    const portToVerify = port || agentPort || 5555;
+    const r = await api(`/api/agent/verify-port?ip=${encodeURIComponent(device.ip)}&port=${portToVerify}`);
     device.verifiedPortStatus = { port: Number(r.port), open: !!r.open };
-    if (Number(r.port) === 5555) device.agentPort5555Verified = !!r.open;
+    if (agentPort && Number(r.port) === Number(agentPort)) device.agentPortVerified = !!r.open;
     if (r.open) {
       showToast(`Port ${r.port} is open on ${r.ip}`, 'success');
     } else {
@@ -1041,7 +1081,7 @@ async function verifyDevicePort(device, port) {
 }
 
 /**
- * Request the agent to switch ADB to port 5555.
+ * Request the agent to switch ADB to its target port.
  */
 async function agentSwitchPort(device) {
   if (busyState) return;
@@ -1052,15 +1092,17 @@ async function agentSwitchPort(device) {
       body: JSON.stringify({ ip: device.ip }),
     });
     if (r.success) {
-      showToast('Agent port switch started — waiting for 5555...', 'info');
+      // Use the agent's target port — never assume 5555
+      const targetPort = device.agent && device.agent.targetPort;
+      showToast(`Agent port switch started — waiting for ${targetPort || 'target port'}...`, 'info');
       // Wait and verify
       await new Promise((res) => setTimeout(res, 3000));
-      const portR = await api(`/api/agent/verify-port?ip=${encodeURIComponent(device.ip)}&port=5555`);
+      const portR = await api(`/api/agent/verify-port?ip=${encodeURIComponent(device.ip)}&port=${targetPort || 5555}`);
       if (portR.open) {
-        showToast(`Port 5555 verified on ${device.ip}`, 'success');
-        device.agentPort5555Verified = true;
+        showToast(`Port ${portR.port} verified on ${device.ip}`, 'success');
+        device.agentPortVerified = true;
       } else {
-        showToast('Port 5555 not yet reachable — agent may still be switching', 'warning');
+        showToast(`Port ${portR.port} not yet reachable — agent may still be switching`, 'warning');
       }
     } else {
       showToast(r.error || 'Agent switch failed', 'error');
@@ -1087,6 +1129,85 @@ async function viewAgentLogs(device) {
       console.log(r.logs);
     } else {
       showToast(r.error || 'Failed to get agent logs', 'error');
+    }
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+/**
+ * Switch ADB TCP port to 5555 on the connected device.
+ * Executes: adb -s <serial> tcpip 5555
+ */
+async function switchTo5555(device) {
+  if (busyState) return;
+  // Find the actual connected ADB serial for this device
+  // ADB devices use serial like "192.168.100.31:43941" — extract IP from serial
+  const serial = (state.devices || []).find(
+    (d) => d.state === 'device' && d.serial && d.serial.split(':')[0] === device.ip
+  )?.serial;
+  if (!serial) {
+    showToast('Device is not connected — cannot switch port', 'error');
+    return;
+  }
+  setBusy(true);
+  try {
+    const r = await api('/api/agent/switch-5555', {
+      method: 'POST',
+      body: JSON.stringify({ deviceSerial: serial }),
+    });
+    if (r.success) {
+      showToast(`ADB TCP port switched to 5555 on ${serial}`, 'success');
+      // Refresh agent status to get the new port
+      const statusR = await api(`/api/agent/status?ip=${encodeURIComponent(device.ip)}`);
+      if (statusR.reachable) {
+        const newPort = statusR.currentPort || statusR.targetPort || statusR.lastPort;
+        if (newPort) {
+          device.port = newPort;
+          device.agent = statusR;
+          device.agentPortVerified = true;
+        }
+      }
+      renderDiscoveredDevices(state.discoveredDevices);
+      renderAgentIntegration(state.discoveredDevices, state.networkScan);
+    } else {
+      showToast(r.error || 'Failed to switch port', 'error');
+    }
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    setBusy(false);
+  }
+}
+
+/**
+ * Reboot the connected device.
+ * Executes: adb -s <serial> reboot
+ */
+async function rebootDevice(device) {
+  if (busyState) return;
+  // Find the actual connected ADB serial for this device
+  // ADB devices use serial like "192.168.100.31:43941" — extract IP from serial
+  const serial = (state.devices || []).find(
+    (d) => d.state === 'device' && d.serial && d.serial.split(':')[0] === device.ip
+  )?.serial;
+  if (!serial) {
+    showToast('Device is not connected — cannot reboot', 'error');
+    return;
+  }
+  setBusy(true);
+  try {
+    const r = await api('/api/agent/reboot', {
+      method: 'POST',
+      body: JSON.stringify({ deviceSerial: serial }),
+    });
+    if (r.success) {
+      showToast(`Reboot requested on ${serial}`, 'success');
+      // Don't treat the device as permanently disconnected — allow normal refresh flow
+    } else {
+      showToast(r.error || 'Failed to reboot device', 'error');
     }
   } catch (e) {
     showToast(e.message, 'error');
@@ -2122,7 +2243,9 @@ $('pairingOk')?.addEventListener('click', async () => {
       });
       if (r.success) {
         showToast('Agent pairing successful — connecting...', 'success');
-        await smartConnectDiscovered(pairingDevice, 5555);
+        // Use the agent's reported port if available — never assume 5555
+        const agentPort = pairingDevice.agent && (pairingDevice.agent.currentPort || pairingDevice.agent.targetPort || pairingDevice.agent.lastPort);
+        await smartConnectDiscovered(pairingDevice, agentPort || 5555);
         return;
       }
       // Agent pairing failed — fall back to manual

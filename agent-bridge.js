@@ -134,6 +134,7 @@ class AgentBridge {
       isPaired: !!(res.json && res.json.isPaired),
       currentPort: res.json && typeof res.json.currentPort === 'number' ? res.json.currentPort : null,
       targetPort: res.json && typeof res.json.targetPort === 'number' ? res.json.targetPort : null,
+      lastPort: res.json && typeof res.json.lastPort === 'number' ? res.json.lastPort : null,
       adb5555Available: !!(res.json && res.json.adb5555Available),
       webServerEnabled: !!(res.json && res.json.webServerEnabled),
       lastStatus: res.json && typeof res.json.lastStatus === 'string' ? res.json.lastStatus : '',
